@@ -79,7 +79,7 @@ async fn get_metrics_service_fn(
             let res = match metrics {
                 Ok(buffer) => Response::new(Body::from(buffer)),
                 Err(e) => {
-                    let mut error_res = Response::default();
+                    let mut error_res = Response::new(Body::from(e.to_string()));
                     *error_res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                     error_res
                 }
