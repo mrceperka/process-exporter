@@ -6,7 +6,7 @@ use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
 fn main() {
     let r = Registry::new();
     let namespace = "r2b2_process";
-    let labels = vec!["pid", "name", "exe"];
+    let labels = vec!["pid", "uid", "name", "exe"];
     let cpu_usage_gauge = GaugeVec::new(
         Opts::new("cpu_usage", "CPU usage of given process (in %). It might be bigger than 100 if run on a multicore machine.").namespace(namespace.clone()),
         &labels,
@@ -37,8 +37,9 @@ fn main() {
     let total_memory = sys.total_memory();
     for (pid, proc) in sys.processes() {
         let pid_str: String = (*pid).to_string();
+        let uid_str: String = proc.uid.to_string();
         let exe_str = proc.exe().to_string_lossy();
-        let label_values = [&pid_str, proc.name(), &exe_str];
+        let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
         cpu_usage_gauge
             .with_label_values(&label_values)
             .set(proc.cpu_usage() as f64);
