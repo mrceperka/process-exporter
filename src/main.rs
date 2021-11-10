@@ -102,21 +102,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut sys = System::new_with_specifics(refresh_kind);
         sys.refresh_processes();
         sys.refresh_memory();
+        sys.refresh_cpu();
         let total_memory = sys.total_memory();
         loop {
             sys.refresh_processes();
             sys.refresh_memory();
+            sys.refresh_cpu();
             for (pid, proc) in sys.processes() {
-                // if (proc.name() != "stress") {
-                //     continue;
-                // }
+                if proc.name() != "stress" {
+                    continue;
+                }
                 let pid_str: String = (*pid).to_string();
                 let uid_str: String = proc.uid.to_string();
                 let exe_str = proc.exe().to_string_lossy();
                 let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
+
+                let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
                 cpu_usage_gauge
                     .with_label_values(&label_values)
-                    .set(proc.cpu_usage().into());
+                    .set(cpu_usage);
                 memory_gauge
                     .with_label_values(&label_values)
                     .set(proc.memory() as f64);
