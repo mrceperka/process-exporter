@@ -7,13 +7,72 @@ use std::net::SocketAddr;
 
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
 
-async fn handler(req: Request<Body>, registry: &Registry) -> Result<Response<Body>, hyper::Error> {
+async fn handler(req: Request<Body>, namespace: &String) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/metrics") => {
+            let r = Registry::new();
+            let labels = vec!["pid", "uid", "name", "exe"];
+            let cpu_usage_gauge = GaugeVec::new(
+                    Opts::new("cpu_usage", "CPU usage of given process (in %). It might be bigger than 100 if run on a multicore machine.").namespace(namespace.clone()),
+                    &labels,
+                ).unwrap();
+            let memory_gauge = GaugeVec::new(
+                Opts::new("memory", "Memory usage of given process (in KB).")
+                    .namespace(namespace.clone()),
+                &labels,
+            )
+            .unwrap();
+            let memory_usage_gauge = GaugeVec::new(
+                Opts::new(
+                    "memory_usage",
+                    "Memory usage of given process (in % of total memory).",
+                )
+                .namespace(namespace.clone()),
+                &labels,
+            )
+            .unwrap();
+            r.register(Box::new(cpu_usage_gauge.clone())).unwrap();
+            r.register(Box::new(memory_gauge.clone())).unwrap();
+            r.register(Box::new(memory_usage_gauge.clone())).unwrap();
+
+            let refresh_kind = RefreshKind::new().with_processes().with_memory();
+            let mut sys = System::new_with_specifics(refresh_kind);
+            sys.refresh_cpu();
+            sys.refresh_memory();
+            sys.refresh_processes();
+            let total_memory = sys.total_memory();
+            for (pid, proc) in sys.processes() {
+                /*
+                if proc.name() != "stress" {
+                    continue;
+                }
+                */
+                let pid_str: String = (*pid).to_string();
+                let uid_str: String = proc.uid.to_string();
+                let exe_str = proc.exe().to_string_lossy();
+                let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
+
+                let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
+                cpu_usage_gauge
+                    .with_label_values(&label_values)
+                    .set(cpu_usage);
+                memory_gauge
+                    .with_label_values(&label_values)
+                    .set(proc.memory() as f64);
+                let mut memory_usage = 0.0;
+                if total_memory > 0 {
+                    memory_usage = 100.0 * (proc.memory() as f64 / total_memory as f64);
+                    memory_usage = (100.0 * memory_usage).round() / 100.0;
+                }
+                memory_usage_gauge
+                    .with_label_values(&label_values)
+                    .set(memory_usage);
+            }
+
             // gather
             let mut buffer = vec![];
             let encoder = TextEncoder::new();
-            let metric_families = registry.gather();
+            let metric_families = r.gather();
             let res = match encoder.encode(&metric_families, &mut buffer) {
                 Ok(_) => Response::new(Body::from(buffer)),
                 Err(e) => {
@@ -72,78 +131,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .parse()
         .expect("Expected socket-address to be valid");
 
-    let r = Registry::new();
-    let labels = vec!["pid", "uid", "name", "exe"];
-    let cpu_usage_gauge = GaugeVec::new(
-            Opts::new("cpu_usage", "CPU usage of given process (in %). It might be bigger than 100 if run on a multicore machine.").namespace(namespace.clone()),
-            &labels,
-        )?;
-    let memory_gauge = GaugeVec::new(
-        Opts::new("memory", "Memory usage of given process (in KB).").namespace(namespace.clone()),
-        &labels,
-    )
-    .unwrap();
-    let memory_usage_gauge = GaugeVec::new(
-        Opts::new(
-            "memory_usage",
-            "Memory usage of given process (in % of total memory).",
-        )
-        .namespace(namespace.clone()),
-        &labels,
-    )
-    .unwrap();
-    r.register(Box::new(cpu_usage_gauge.clone())).unwrap();
-    r.register(Box::new(memory_gauge.clone())).unwrap();
-    r.register(Box::new(memory_usage_gauge.clone())).unwrap();
-
-    // collect metrics each 1000ms
-    tokio::spawn(async move {
-        let refresh_kind = RefreshKind::new().with_processes().with_memory();
-        let mut sys = System::new_with_specifics(refresh_kind);
-        sys.refresh_processes();
-        sys.refresh_memory();
-        sys.refresh_cpu();
-        let total_memory = sys.total_memory();
-        loop {
-            sys.refresh_processes();
-            sys.refresh_memory();
-            sys.refresh_cpu();
-            for (pid, proc) in sys.processes() {
-                if proc.name() != "stress" {
-                    continue;
-                }
-                let pid_str: String = (*pid).to_string();
-                let uid_str: String = proc.uid.to_string();
-                let exe_str = proc.exe().to_string_lossy();
-                let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
-
-                let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
-                cpu_usage_gauge
-                    .with_label_values(&label_values)
-                    .set(cpu_usage);
-                memory_gauge
-                    .with_label_values(&label_values)
-                    .set(proc.memory() as f64);
-                let mut memory_usage = 0.0;
-                if total_memory > 0 {
-                    memory_usage = 100.0 * (proc.memory() as f64 / total_memory as f64);
-                    memory_usage = (100.0 * memory_usage).round() / 100.0;
-                }
-                memory_usage_gauge
-                    .with_label_values(&label_values)
-                    .set(memory_usage);
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-        }
-    });
-
     let service = make_service_fn(move |_| {
-        let r = r.clone();
+        let namespace = namespace.clone();
         return async move {
             Ok::<_, hyper::Error>(service_fn(move |req| {
-                let r = r.clone();
-                return async move { handler(req, &r).await };
+                let namespace = namespace.clone();
+                return async move { handler(req, &namespace).await };
             }))
         };
     });
