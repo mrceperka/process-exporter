@@ -2,12 +2,73 @@ use clap::{App, Arg};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use prometheus::{Encoder, GaugeVec, Opts, Registry, TextEncoder};
+use regex::Regex;
 use std::error::Error;
 use std::net::SocketAddr;
-
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
 
-async fn handler(req: Request<Body>, namespace: &String) -> Result<Response<Body>, hyper::Error> {
+use lazy_static::lazy_static;
+
+#[derive(Debug, Clone)]
+enum Op {
+    GT,
+    GTE,
+    LT,
+    LTE,
+    EQ,
+}
+
+#[derive(Debug, Clone)]
+struct Range {
+    op: Op,
+    value: f32,
+}
+fn validate_range(text: &str) -> Result<Option<Range>, String> {
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"^(>|>=|=|<|<=)\s*(\d+(\.\d+)?)$").unwrap();
+    }
+    match RE.captures(text) {
+        Some(captures) => {
+            if let Some(num) = captures.get(2) {
+                let num = num.as_str().parse::<f32>();
+                match num {
+                    Err(e) => {
+                        return Err(e.to_string());
+                    }
+                    Ok(num) => {
+                        if let Some(op) = captures.get(1) {
+                            let range = Range {
+                                op: match op.as_str() {
+                                    ">=" => Op::GTE,
+                                    ">" => Op::GT,
+                                    "=" => Op::EQ,
+                                    "<=" => Op::LTE,
+                                    "<" => Op::LT,
+                                    _ => Op::EQ,
+                                },
+                                value: num,
+                            };
+                            return Ok(Some(range));
+                        } else {
+                            return Err("op capture not found".to_string());
+                        }
+                    }
+                }
+            }
+
+            return Err("value catupre not found".to_string());
+        }
+        None => return Ok(None),
+    };
+}
+
+async fn handler(
+    req: Request<Body>,
+    namespace: &String,
+    filter_name: &Option<Regex>,
+    filter_exe: &Option<Regex>,
+    filter_cpu_usage: &Option<Range>,
+) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/metrics") => {
             let r = Registry::new();
@@ -42,17 +103,54 @@ async fn handler(req: Request<Body>, namespace: &String) -> Result<Response<Body
             sys.refresh_processes();
             let total_memory = sys.total_memory();
             for (pid, proc) in sys.processes() {
-                /*
-                if proc.name() != "stress" {
-                    continue;
+                if let Some(filter_name_regex) = filter_name {
+                    if filter_name_regex.is_match(proc.name()) == false {
+                        continue;
+                    }
                 }
-                */
+
+                let exe_str = proc.exe().to_string_lossy();
+                if let Some(filter_exe_regex) = filter_exe {
+                    if filter_exe_regex.is_match(&exe_str) == false {
+                        continue;
+                    }
+                }
                 let pid_str: String = (*pid).to_string();
                 let uid_str: String = proc.uid.to_string();
-                let exe_str = proc.exe().to_string_lossy();
                 let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
 
                 let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
+
+                if let Some(cpu_usage_range) = filter_cpu_usage {
+                    match cpu_usage_range.op {
+                        Op::GT => {
+                            if false == (cpu_usage > (cpu_usage_range.value as f64)) {
+                                continue;
+                            }
+                        }
+                        Op::GTE => {
+                            if false == (cpu_usage >= (cpu_usage_range.value as f64)) {
+                                continue;
+                            }
+                        }
+                        Op::EQ => {
+                            if false == (cpu_usage == (cpu_usage_range.value as f64)) {
+                                continue;
+                            }
+                        }
+                        Op::LT => {
+                            if false == (cpu_usage < (cpu_usage_range.value as f64)) {
+                                continue;
+                            }
+                        }
+                        Op::LTE => {
+                            if false == (cpu_usage <= (cpu_usage_range.value as f64)) {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 cpu_usage_gauge
                     .with_label_values(&label_values)
                     .set(cpu_usage);
@@ -118,6 +216,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 })
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("filter-name")
+                .long("filter-name")
+                .help("Filter process name by regex")
+                .validator(|v| match Regex::new(v.as_str()) {
+                    Err(e) => Err(e.to_string()),
+                    Ok(_) => Ok(()),
+                })
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("filter-exe")
+                .long("filter-exe")
+                .help("Filter process exe by regex")
+                .validator(|v| match Regex::new(v.as_str()) {
+                    Err(e) => Err(e.to_string()),
+                    Ok(_) => Ok(()),
+                })
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("filter-cpu-usage")
+                .long("filter-cpu-usage")
+                .help("Filter process usage by expression. >=, >, =, <, <=")
+                .validator(|v| match validate_range(v.as_str()) {
+                    Err(e) => Err(e.to_string()),
+                    Ok(_) => Ok(()),
+                })
+                .takes_value(true),
+        )
         .get_matches();
 
     let namespace = matches
@@ -131,12 +259,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .parse()
         .expect("Expected socket-address to be valid");
 
+    let filter_name = match matches.value_of("filter-name") {
+        Some(v) => Some(Regex::new(v).expect("Expected valid regex")),
+        None => None,
+    };
+
+    let filter_exe = match matches.value_of("filter-exe") {
+        Some(v) => Some(Regex::new(v).expect("Expected valid regex")),
+        None => None,
+    };
+
+    let filter_cpu_usage = match matches.value_of("filter-cpu-usage") {
+        Some(v) => match validate_range(v) {
+            Ok(range) => range,
+            _ => None,
+        },
+        _ => None,
+    };
+
     let service = make_service_fn(move |_| {
         let namespace = namespace.clone();
+        let filter_name = filter_name.clone();
+        let filter_exe = filter_exe.clone();
+        let filter_cpu_usage = filter_cpu_usage.clone();
         return async move {
             Ok::<_, hyper::Error>(service_fn(move |req| {
                 let namespace = namespace.clone();
-                return async move { handler(req, &namespace).await };
+                let filter_name = filter_name.clone();
+                let filter_exe = filter_exe.clone();
+                let filter_cpu_usage = filter_cpu_usage.clone();
+                return async move {
+                    handler(
+                        req,
+                        &namespace,
+                        &filter_name,
+                        &filter_exe,
+                        &filter_cpu_usage,
+                    )
+                    .await
+                };
             }))
         };
     });

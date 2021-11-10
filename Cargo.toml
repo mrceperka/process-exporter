@@ -5,8 +5,10 @@ edition = "2021"
 
 [dependencies]
 prometheus = "0.13"
-sysinfo = {version = "0.21", features = ["debug"]}
-#sysinfo = "0.21"
+# sysinfo = {version = "0.21", features = ["debug"]}
+sysinfo = "0.21"
 clap = "2.3"
+regex = "1.5"
+lazy_static = "1.4"
 hyper = {version = "0.14", features = ["full"]}
 tokio = {version = "1", features = ["full"]}
