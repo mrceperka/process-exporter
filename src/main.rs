@@ -10,55 +10,40 @@ use std::sync::{Arc, Mutex};
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
 
 #[derive(Debug, Clone)]
-enum Op {
-    GT,
-    GTE,
-    LT,
-    LTE,
-    EQ,
-}
-
-#[derive(Debug, Clone)]
 struct Range {
-    op: Op,
-    value: f32,
+    start: u32,
+    end: u32,
 }
 fn validate_range(text: &str) -> Result<Option<Range>, String> {
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"^(>|>=|=|<|<=)\s*(\d+(\.\d+)?)$").unwrap();
+        static ref RE: Regex = Regex::new(r"^(\d+)\.\.(\d+)$").unwrap();
     }
     match RE.captures(text) {
-        Some(captures) => {
-            if let Some(num) = captures.get(2) {
-                let num = num.as_str().parse::<f32>();
-                match num {
-                    Err(e) => {
-                        return Err(e.to_string());
+        Some(captures) => match (captures.get(1), captures.get(2)) {
+            (Some(start), Some(end)) => match (start.as_str().parse(), end.as_str().parse()) {
+                (Ok(start), Ok(end)) => {
+                    if start > end {
+                        return Err(format!(
+                            "start of range ({}) must not be greater than the end ({})",
+                            start, end
+                        ));
                     }
-                    Ok(num) => {
-                        if let Some(op) = captures.get(1) {
-                            let range = Range {
-                                op: match op.as_str() {
-                                    ">=" => Op::GTE,
-                                    ">" => Op::GT,
-                                    "=" => Op::EQ,
-                                    "<=" => Op::LTE,
-                                    "<" => Op::LT,
-                                    _ => Op::EQ,
-                                },
-                                value: num,
-                            };
-                            return Ok(Some(range));
-                        } else {
-                            return Err("op capture not found".to_string());
-                        }
-                    }
+                    let range = Range { start, end };
+                    return Ok(Some(range));
                 }
+                _ => {
+                    return Err(format!(
+                        "failed to parse start ({}) and end ({})",
+                        start.as_str(),
+                        end.as_str()
+                    ));
+                }
+            },
+            _ => {
+                return Err("start and end captures not found".to_string());
             }
-
-            return Err("value catupre not found".to_string());
-        }
-        None => return Ok(None),
+        },
+        None => return Err("value does not match range regex".to_string()),
     };
 }
 
@@ -125,42 +110,21 @@ async fn handler(
                         continue;
                     }
                 }
-                let pid_str: String = (*pid).to_string();
-                let uid_str: String = proc.uid.to_string();
-                let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
 
                 let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
-
+                println!("{:?}", filter_cpu_usage);
                 if let Some(cpu_usage_range) = filter_cpu_usage {
-                    match cpu_usage_range.op {
-                        Op::GT => {
-                            if false == (cpu_usage > (cpu_usage_range.value as f64)) {
-                                continue;
-                            }
-                        }
-                        Op::GTE => {
-                            if false == (cpu_usage >= (cpu_usage_range.value as f64)) {
-                                continue;
-                            }
-                        }
-                        Op::EQ => {
-                            if false == (cpu_usage == (cpu_usage_range.value as f64)) {
-                                continue;
-                            }
-                        }
-                        Op::LT => {
-                            if false == (cpu_usage < (cpu_usage_range.value as f64)) {
-                                continue;
-                            }
-                        }
-                        Op::LTE => {
-                            if false == (cpu_usage <= (cpu_usage_range.value as f64)) {
-                                continue;
-                            }
-                        }
+                    let is_in_range = (cpu_usage >= (cpu_usage_range.start as f64))
+                        && (cpu_usage <= (cpu_usage_range.end as f64));
+
+                    if false == is_in_range {
+                        continue;
                     }
                 }
 
+                let pid_str: String = (*pid).to_string();
+                let uid_str: String = proc.uid.to_string();
+                let label_values = [&pid_str, &uid_str, proc.name(), &exe_str];
                 cpu_usage_gauge
                     .with_label_values(&label_values)
                     .set(cpu_usage);
@@ -204,7 +168,7 @@ async fn handler(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Process exporter")
-        .version("0.2.0")
+        .version("0.3.0")
         .about("Prometheus process exporter")
         .arg(
             Arg::with_name("namespace")
@@ -249,7 +213,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .arg(
             Arg::with_name("filter-cpu-usage")
                 .long("filter-cpu-usage")
-                .help("Filter process usage by expression. >=, >, =, <, <=")
+                .help("Filter process usage by expression. Eg. 0..10")
                 .validator(|v| match validate_range(v.as_str()) {
                     Err(e) => Err(e.to_string()),
                     Ok(_) => Ok(()),
