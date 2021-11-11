@@ -112,7 +112,6 @@ async fn handler(
                 }
 
                 let cpu_usage = (100.0 * proc.cpu_usage() as f64).round() / 100.0;
-                println!("{:?}", filter_cpu_usage);
                 if let Some(cpu_usage_range) = filter_cpu_usage {
                     let is_in_range = (cpu_usage >= (cpu_usage_range.start as f64))
                         && (cpu_usage <= (cpu_usage_range.end as f64));
