@@ -1,11 +1,10 @@
 [package]
 name = "process-exporter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 prometheus = "0.13"
-# sysinfo = {version = "0.21", features = ["debug"]}
 sysinfo = "0.21"
 clap = "2.3"
 regex = "1.5"

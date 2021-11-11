@@ -1,13 +1,13 @@
 use clap::{App, Arg};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use lazy_static::lazy_static;
 use prometheus::{Encoder, GaugeVec, Opts, Registry, TextEncoder};
 use regex::Regex;
 use std::error::Error;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
-
-use lazy_static::lazy_static;
 
 #[derive(Debug, Clone)]
 enum Op {
@@ -64,6 +64,7 @@ fn validate_range(text: &str) -> Result<Option<Range>, String> {
 
 async fn handler(
     req: Request<Body>,
+    shared_sys: &Arc<Mutex<System>>,
     namespace: &String,
     filter_name: &Option<Regex>,
     filter_exe: &Option<Regex>,
@@ -96,13 +97,22 @@ async fn handler(
             r.register(Box::new(memory_gauge.clone())).unwrap();
             r.register(Box::new(memory_usage_gauge.clone())).unwrap();
 
-            let refresh_kind = RefreshKind::new().with_processes().with_memory();
-            let mut sys = System::new_with_specifics(refresh_kind);
-            sys.refresh_cpu();
-            sys.refresh_memory();
+            let mut sys = match shared_sys.lock() {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut error_res = Response::new(Body::from(e.to_string()));
+                    *error_res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                    return Ok(error_res);
+                }
+            };
+
+            // not needed with sysinfo 0.21.1
+            // sys.refresh_cpu();
             sys.refresh_processes();
+            sys.refresh_memory();
             let total_memory = sys.total_memory();
-            for (pid, proc) in sys.processes() {
+            let processes = sys.processes();
+            for (pid, proc) in processes {
                 if let Some(filter_name_regex) = filter_name {
                     if filter_name_regex.is_match(proc.name()) == false {
                         continue;
@@ -194,7 +204,7 @@ async fn handler(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Process exporter")
-        .version("0.1.0")
+        .version("0.2.0")
         .about("Prometheus process exporter")
         .arg(
             Arg::with_name("namespace")
@@ -277,20 +287,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ => None,
     };
 
+    let refresh_kind = RefreshKind::new().with_processes().with_memory();
+    let mut sys = System::new_with_specifics(refresh_kind);
+    sys.refresh_processes();
+    sys.refresh_memory();
+    let shared_sys = Arc::new(Mutex::new(sys));
     let service = make_service_fn(move |_| {
         let namespace = namespace.clone();
         let filter_name = filter_name.clone();
         let filter_exe = filter_exe.clone();
         let filter_cpu_usage = filter_cpu_usage.clone();
+        let shared_sys = shared_sys.clone();
         return async move {
             Ok::<_, hyper::Error>(service_fn(move |req| {
                 let namespace = namespace.clone();
                 let filter_name = filter_name.clone();
                 let filter_exe = filter_exe.clone();
                 let filter_cpu_usage = filter_cpu_usage.clone();
+                let shared_sys = shared_sys.clone();
                 return async move {
                     handler(
                         req,
+                        &shared_sys,
                         &namespace,
                         &filter_name,
                         &filter_exe,
