@@ -16,7 +16,7 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-        --filter-cpu-usage <filter-cpu-usage>    Filter process usage by expression. >=, >, =, <, <=
+        --filter-cpu-usage <filter-cpu-usage>    Filter process usage by expression, e.g., 0..10
         --filter-exe <filter-exe>                Filter process exe by regex
         --filter-name <filter-name>              Filter process name by regex
         --namespace <namespace>

@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .arg(
             Arg::with_name("filter-cpu-usage")
                 .long("filter-cpu-usage")
-                .help("Filter process usage by expression. Eg. 0..10")
+                .help("Filter process usage by expression, e.g., 0..10")
                 .validator(|v| match validate_range(v.as_str()) {
                     Err(e) => Err(e.to_string()),
                     Ok(_) => Ok(()),
