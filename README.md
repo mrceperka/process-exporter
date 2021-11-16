@@ -1,5 +1,5 @@
 # process-exporter
-
+[![build](https://github.com/mrceperka/process-exporter/actions/workflows/rust.yml/badge.svg)](https://github.com/mrceperka/process-exporter/actions/workflows/rust.yml)
 ```sh
 cargo run
 # go to localhost:9333
