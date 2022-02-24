@@ -2,13 +2,7 @@
 
 [![build](https://github.com/mrceperka/process-exporter/actions/workflows/rust.yml/badge.svg)](https://github.com/mrceperka/process-exporter/actions/workflows/rust.yml)
 
-```sh
-cargo run
-```
-
-Check http://localhost:9333/metrics
-
-## usage
+## Usage
 
 ```sh
 USAGE:
@@ -27,3 +21,17 @@ OPTIONS:
 
         --socket-address <socket-address>        Socket address for server to bind to. [default: 0.0.0.0:9333]
 ```
+
+# Build
+
+```sh
+cargo build --release
+```
+
+# Dev
+
+```sh
+cargo run
+```
+
+Check http://localhost:9333/metrics
