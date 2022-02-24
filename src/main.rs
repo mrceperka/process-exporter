@@ -7,7 +7,7 @@ use regex::Regex;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
+use sysinfo::{ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
 
 #[derive(Debug, Clone)]
 struct Range {
@@ -250,7 +250,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ => None,
     };
 
-    let refresh_kind = RefreshKind::new().with_processes().with_memory();
+    let refresh_kind = RefreshKind::new()
+        .with_processes(ProcessRefreshKind::everything())
+        .with_memory();
     let mut sys = System::new_with_specifics(refresh_kind);
     sys.refresh_processes();
     sys.refresh_memory();
